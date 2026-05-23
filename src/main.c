@@ -17,8 +17,8 @@ LOG_MODULE_REGISTER(waveform_gen, CONFIG_LOG_DEFAULT_LEVEL);
 #define I2S_NODE DT_NODELABEL(sai1)
 #define SW0_NODE DT_ALIAS(sw0)
 
-#define SAMPLE_RATE 48000
-#define SAMPLE_BIT_WIDTH 16
+#define SAMPLE_RATE CONFIG_AUDIO_SAMPLE_RATE
+#define SAMPLE_BIT_WIDTH CONFIG_AUDIO_BIT_WIDTH
 #define CHANNELS 2
 #define SAMPLES_PER_BLOCK 128
 #define BLOCK_SIZE (SAMPLES_PER_BLOCK * CHANNELS * sizeof(int16_t))
@@ -28,17 +28,24 @@ K_MEM_SLAB_DEFINE(audio_slab, BLOCK_SIZE, BLOCK_COUNT, 32);
 /* Dummy slab for RX to satisfy driver configuration */
 K_MEM_SLAB_DEFINE(rx_slab, BLOCK_SIZE, 4, 32);
 
-static const struct device *const i2s_dev = DEVICE_DT_GET(I2S_NODE);
-static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SW0_NODE, gpios);
-static struct gpio_callback button_cb_data;
+/**
+ * @brief Application state structure to eliminate globals
+ */
+struct app_state {
+	volatile enum waveform_type current_waveform;
+	volatile bool mode_changed;
+	struct gpio_callback button_cb_data;
+};
 
-static volatile enum waveform_type current_waveform = WAVE_SINE;
-static volatile bool mode_changed = true;
-
+/**
+ * @brief Button interrupt handler using CONTAINER_OF for state access
+ */
 void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	current_waveform = (current_waveform + 1) % WAVE_COUNT;
-	mode_changed = true;
+	struct app_state *state = CONTAINER_OF(cb, struct app_state, button_cb_data);
+
+	state->current_waveform = (state->current_waveform + 1) % WAVE_COUNT;
+	state->mode_changed = true;
 }
 
 static void interleave_stereo(q15_t *mono, int16_t *stereo, uint32_t samples)
@@ -51,9 +58,16 @@ static void interleave_stereo(q15_t *mono, int16_t *stereo, uint32_t samples)
 
 int main(void)
 {
+	struct app_state state = {
+		.current_waveform = WAVE_SINE,
+		.mode_changed = true,
+	};
 	uint16_t phase = 0;
 	struct i2s_config config;
 	int ret;
+
+	const struct device *const i2s_dev = DEVICE_DT_GET(I2S_NODE);
+	const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SW0_NODE, gpios);
 
 	LOG_INF("Starting I2S Waveform Generator");
 	LOG_INF("Configuration: %d Hz, %d-bit, %d channels", 
@@ -100,8 +114,8 @@ int main(void)
 
 	gpio_pin_configure_dt(&button, GPIO_INPUT);
 	gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
-	gpio_init_callback(&button_cb_data, button_pressed, BIT(button.pin));
-	gpio_add_callback(button.port, &button_cb_data);
+	gpio_init_callback(&state.button_cb_data, button_pressed, BIT(button.pin));
+	gpio_add_callback(button.port, &state.button_cb_data);
 
 	/* Start RX first to trigger clock generation */
 	ret = i2s_trigger(i2s_dev, I2S_DIR_RX, I2S_TRIGGER_START);
@@ -114,11 +128,11 @@ int main(void)
 	bool started = false;
 
 	while (1) {
-		enum waveform_type mode = current_waveform;
+		enum waveform_type mode = state.current_waveform;
 
-		if (mode_changed) {
+		if (state.mode_changed) {
 			LOG_INF("Active Waveform: %s", get_waveform_name(mode));
-			mode_changed = false;
+			state.mode_changed = false;
 		}
 
 		/* Generate Raw Waveform Batch */

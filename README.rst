@@ -45,7 +45,8 @@ To build the project:
 
 .. code-block:: bash
 
-    west build -b frdm_mcxn947/mcxn947/cpu0 i2s-dac -p always
+    west build -b frdm_mcxn947/mcxn947/cpu0 -p always
+
 
 Interactive Control:
 Press **SW2** to cycle through: **SINE -> SQUARE -> SAWTOOTH -> TRIANGLE -> SINE**.
