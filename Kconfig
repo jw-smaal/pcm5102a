@@ -11,9 +11,9 @@ config WAVEFORM_FREQUENCY
 
 config AUDIO_SAMPLE_RATE
 	int "Sample Rate (Hz)"
-	default 48000
+	default 192000
 	help
-	  How many times per second the audio value is updated. (Recommended: 48000)
+	  How many times per second the audio value is updated. (Recommended: 192000 for low aliasing)
 
 config AUDIO_BIT_WIDTH
 	int "Sample Bit Width"

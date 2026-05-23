@@ -24,35 +24,36 @@ LOG_MODULE_REGISTER(waveform_gen, CONFIG_LOG_DEFAULT_LEVEL);
 #define BLOCK_SIZE (SAMPLES_PER_BLOCK * CHANNELS * sizeof(int16_t))
 #define BLOCK_COUNT 16
 
+/* Attenuation factor: ~0.15 (approx -16dB reduction to target -10dBV) */
+#define ATTENUATION_FACTOR 4915
+
 K_MEM_SLAB_DEFINE(audio_slab, BLOCK_SIZE, BLOCK_COUNT, 32);
-/* Dummy slab for RX to satisfy driver configuration */
+/* Dummy slab for RX */
 K_MEM_SLAB_DEFINE(rx_slab, BLOCK_SIZE, 4, 32);
 
-/**
- * @brief Application state structure to eliminate globals
- */
 struct app_state {
 	volatile enum waveform_type current_waveform;
 	volatile bool mode_changed;
 	struct gpio_callback button_cb_data;
 };
 
-/**
- * @brief Button interrupt handler using CONTAINER_OF for state access
- */
 void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	struct app_state *state = CONTAINER_OF(cb, struct app_state, button_cb_data);
-
 	state->current_waveform = (state->current_waveform + 1) % WAVE_COUNT;
 	state->mode_changed = true;
 }
 
-static void interleave_stereo(q15_t *mono, int16_t *stereo, uint32_t samples)
+/**
+ * @brief Interleave mono samples into stereo 16-bit words with attenuation
+ */
+static void interleave_stereo_attenuated(q15_t *mono, int16_t *stereo, uint32_t samples)
 {
 	for (uint32_t i = 0; i < samples; i++) {
-		stereo[i * 2] = (int16_t)mono[i];     /* Left */
-		stereo[i * 2 + 1] = (int16_t)mono[i]; /* Right */
+		/* Apply digital attenuation (scale Q15 by 0.15) */
+		int16_t val = (int16_t)(((int32_t)mono[i] * ATTENUATION_FACTOR) >> 15);
+		stereo[i * 2] = val;     /* Left */
+		stereo[i * 2 + 1] = val; /* Right */
 	}
 }
 
@@ -72,6 +73,7 @@ int main(void)
 	LOG_INF("Starting I2S Waveform Generator");
 	LOG_INF("Configuration: %d Hz, %d-bit, %d channels", 
 		SAMPLE_RATE, SAMPLE_BIT_WIDTH, CHANNELS);
+	LOG_INF("Output level: ~ -10dBV (not full scale)");
 
 	if (!device_is_ready(i2s_dev)) {
 		LOG_ERR("I2S device not ready");
@@ -83,7 +85,6 @@ int main(void)
 		return -ENODEV;
 	}
 
-	/* Common configuration */
 	config.word_size = SAMPLE_BIT_WIDTH;
 	config.channels = CHANNELS;
 	config.format = I2S_FMT_DATA_FORMAT_I2S;
@@ -100,7 +101,7 @@ int main(void)
 		return ret;
 	}
 
-	/* Configure RX (Mandatory for shared clock activation) */
+	/* Configure RX */
 	config.mem_slab = &rx_slab;
 	ret = i2s_configure(i2s_dev, I2S_DIR_RX, &config);
 	if (ret < 0) {
@@ -117,7 +118,7 @@ int main(void)
 	gpio_init_callback(&state.button_cb_data, button_pressed, BIT(button.pin));
 	gpio_add_callback(button.port, &state.button_cb_data);
 
-	/* Start RX first to trigger clock generation */
+	/* Start RX first to enable clock generator */
 	ret = i2s_trigger(i2s_dev, I2S_DIR_RX, I2S_TRIGGER_START);
 	if (ret < 0) {
 		LOG_WRN("I2S RX start failed: %d", ret);
@@ -144,8 +145,8 @@ int main(void)
 			continue;
 		}
 
-		/* Interleave and write to memory block */
-		interleave_stereo(mono_buffer, (int16_t *)mem_block, SAMPLES_PER_BLOCK);
+		/* Interleave and write to memory block with attenuation */
+		interleave_stereo_attenuated(mono_buffer, (int16_t *)mem_block, SAMPLES_PER_BLOCK);
 
 		/* Send to I2S */
 		ret = i2s_write(i2s_dev, mem_block, BLOCK_SIZE);

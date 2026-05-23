@@ -26,8 +26,8 @@
 			pinmux = <SAI1_TX_BCLK_PIO3_16>,   /* J1 Pin 1  - Bit Clock */
 				 <SAI1_TX_FS_PIO3_17>,     /* J1 Pin 3  - Frame Sync (LRCK) */
 				 <SAI1_TXD0_PIO3_20>,      /* J1 Pin 5  - Data Out */
-				 <SAI1_MCLK_PIO1_21>,      /* J1 Pin 7  - Master Clock */
-				 <SAI1_RX_BCLK_PIO3_18>;   /* J1 Pin 9  - BCK (if swapped) */
+				 <SAI1_RX_BCLK_PIO3_18>;   /* J1 Pin 9  - Bit Clock (Swapped) */
+			/* NOTE: PIO1_21 (MCLK) removed to reduce EMI near data lines */
 			drive-strength = "high";
 			slew-rate = "fast";
 			input-enable;
