@@ -6,6 +6,14 @@
 
 #include "effects.h"
 
+
+void effect_bitbeef(q15_t *buffer, uint32_t size)
+{
+	for (uint32_t i = 0; i < size; i++) {
+		buffer[i] = (q15_t)(buffer[i] & 0xBEEF);
+	}
+}
+
 void effect_bitcrush(q15_t *buffer, uint32_t size, uint8_t bits)
 {
 	if (bits >= 16) {

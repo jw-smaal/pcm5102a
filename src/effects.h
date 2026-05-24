@@ -10,6 +10,12 @@
 #include <zephyr/kernel.h>
 #include <arm_math.h>
 
+/** 
+ * @brief Simply AND with 0xBEEF in the buffer. 
+ * @param size Number of samples in the buffer.
+ */
+void effect_bitbeef(q15_t *buffer, uint32_t size);
+
 /**
  * @brief Bitcrushes the buffer in-place to the specified bit depth.
  * 

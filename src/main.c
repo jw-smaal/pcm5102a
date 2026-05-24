@@ -35,9 +35,17 @@ LOG_MODULE_REGISTER(waveform_gen, CONFIG_LOG_DEFAULT_LEVEL);
 #define AUDIO_STACK_SIZE 2048
 #define AUDIO_PRIORITY -2
 
-/* --- Resources --- */
+/* Slab for TX */
 K_MEM_SLAB_DEFINE(audio_slab, BLOCK_SIZE, BLOCK_COUNT, 32);
-K_MEM_SLAB_DEFINE(rx_slab, BLOCK_SIZE, 4, 32); /* Dummy slab for RX */
+/* Dummy slab for RX */
+K_MEM_SLAB_DEFINE(rx_slab, BLOCK_SIZE, 4, 32); 
+
+enum effect_mode {
+	EFFECT_BYPASS = 0,
+	EFFECT_BITCRUSH,
+	EFFECT_BITBEEF,
+	EFFECT_COUNT
+};
 
 struct synth_state {
 	struct k_mutex lock;
@@ -46,7 +54,7 @@ struct synth_state {
 	uint32_t phase_inc;
 	bool mode_changed;
 	bool mix_mode;
-	uint8_t bitcrush_depth;
+	enum effect_mode effect;
 };
 
 static struct synth_state global_state = {
@@ -54,7 +62,7 @@ static struct synth_state global_state = {
 	.frequency = 440,
 	.mode_changed = true,
 	.mix_mode = false,
-	.bitcrush_depth = 16, /* Clean */
+	.effect = EFFECT_BYPASS,
 };
 
 static const struct device *const i2s_dev = DEVICE_DT_GET(I2S_NODE);
@@ -95,7 +103,7 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 		enum waveform_type mode;
 		uint32_t phase_inc;
 		bool mix_active;
-		uint8_t crush_bits;
+		enum effect_mode effect;
 		uint32_t local_phase;
 
 		/* Safely copy control parameters */
@@ -103,12 +111,17 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 		mode = global_state.current_waveform;
 		phase_inc = global_state.phase_inc;
 		mix_active = global_state.mix_mode;
-		crush_bits = global_state.bitcrush_depth;
+		effect = global_state.effect;
+
 		if (global_state.mode_changed) {
-			LOG_INF("Audio Mode -> %s %s [Bits: %d]", 
+			const char *fx_name = "BYPASS";
+			if (effect == EFFECT_BITCRUSH) fx_name = "BITCRUSH (4-bit)";
+			if (effect == EFFECT_BITBEEF) fx_name = "BITBEEF (0xBEEF)";
+
+			LOG_INF("Audio Mode -> %s %s [Effect: %s]", 
 				get_waveform_name(mode), 
 				mix_active ? "(Mixed)" : "",
-				crush_bits);
+				fx_name);
 			global_state.mode_changed = false;
 		}
 		k_mutex_unlock(&global_state.lock);
@@ -132,7 +145,17 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 		}
 
 		/* 3. Apply Global Effects */
-		effect_bitcrush(mono_buffer, SAMPLES_PER_BLOCK, crush_bits);
+		switch (effect) {
+		case EFFECT_BITCRUSH:
+			effect_bitcrush(mono_buffer, SAMPLES_PER_BLOCK, 4);
+			break;
+		case EFFECT_BITBEEF:
+			effect_bitbeef(mono_buffer, SAMPLES_PER_BLOCK);
+			break;
+		default:
+			/* BYPASS: Do nothing, zero overhead */
+			break;
+		}
 
 		/* 4. Apply Master Output Attenuation */
 		effect_attenuate(mono_buffer, SAMPLES_PER_BLOCK, ATTENUATION_FACTOR);
@@ -190,28 +213,9 @@ void mix_button_pressed(const struct device *dev, struct gpio_callback *cb, uint
 {
 	ARG_UNUSED(dev); ARG_UNUSED(cb); ARG_UNUSED(pins);
 
-	static uint8_t state = 0;
-	state = (state + 1) % 4;
-
 	k_mutex_lock(&global_state.lock, K_NO_WAIT);
-	switch (state) {
-	case 0: /* Clean Solo */
-		global_state.mix_mode = false;
-		global_state.bitcrush_depth = 16;
-		break;
-	case 1: /* Clean Mix */
-		global_state.mix_mode = true;
-		global_state.bitcrush_depth = 16;
-		break;
-	case 2: /* Crushed Solo */
-		global_state.mix_mode = false;
-		global_state.bitcrush_depth = 4;
-		break;
-	case 3: /* Crushed Mix */
-		global_state.mix_mode = true;
-		global_state.bitcrush_depth = 4;
-		break;
-	}
+	/* Cycle through effects: BYPASS -> BITCRUSH -> BITBEEF */
+	global_state.effect = (global_state.effect + 1) % EFFECT_COUNT;
 	global_state.mode_changed = true;
 	k_mutex_unlock(&global_state.lock);
 }
@@ -286,7 +290,7 @@ int main(void)
 
 	LOG_INF("Control Plane Ready.");
 	LOG_INF("SW2: Cycle Waveform Type");
-	LOG_INF("SW3: Cycle Mix/Effect state (Clean/Mix/Crush)");
+	LOG_INF("SW3: Toggle Bitcrush Effect (A/B Comparison)");
 
 	while (1) {
 		k_sleep(K_SECONDS(1));
