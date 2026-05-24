@@ -25,6 +25,7 @@
 / {
 	aliases {
 		i2s-tx = &sai_0;
+		sw-wave = &user_button; /* SW3 on E31B */
 	};
 };
 

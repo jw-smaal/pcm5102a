@@ -16,6 +16,8 @@
 / {
 	aliases {
 		i2s-tx = &sai1;
+		sw-wave = &user_button_2; /* SW2 */
+		sw-mix = &user_button_3;  /* SW3 */
 	};
 };
 

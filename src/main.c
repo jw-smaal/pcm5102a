@@ -16,7 +16,8 @@ LOG_MODULE_REGISTER(waveform_gen, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* --- Configuration --- */
 #define I2S_NODE DT_ALIAS(i2s_tx)
-#define SW0_NODE DT_ALIAS(sw0)
+#define SW_WAVE_NODE DT_ALIAS(sw_wave)
+#define SW_MIX_NODE  DT_ALIAS(sw_mix)
 
 #define SAMPLE_RATE CONFIG_AUDIO_SAMPLE_RATE
 #define SAMPLE_BIT_WIDTH CONFIG_AUDIO_BIT_WIDTH
@@ -42,12 +43,14 @@ struct synth_state {
 	uint32_t frequency;
 	uint32_t phase_inc;
 	bool mode_changed;
+	bool mix_mode;
 };
 
 static struct synth_state global_state = {
 	.current_waveform = WAVE_SINE,
-	.frequency = CONFIG_WAVEFORM_FREQUENCY,
+	.frequency = 440,
 	.mode_changed = true,
+	.mix_mode = false,
 };
 
 static const struct device *const i2s_dev = DEVICE_DT_GET(I2S_NODE);
@@ -75,8 +78,9 @@ static void interleave_stereo(q15_t *mono, int16_t *stereo, uint32_t samples)
 void audio_thread_fn(void *p1, void *p2, void *p3)
 {
 	ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
-	uint32_t phase = 0;
+	uint32_t master_phase = 0;
 	q15_t mono_buffer[SAMPLES_PER_BLOCK];
+	q15_t mono_buffer2[SAMPLES_PER_BLOCK];
 	void *mem_block;
 	bool started = false;
 	int ret;
@@ -86,21 +90,45 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 	while (1) {
 		enum waveform_type mode;
 		uint32_t phase_inc;
+		bool mix_active;
+		uint32_t local_phase;
 
 		/* Safely copy control parameters */
 		k_mutex_lock(&global_state.lock, K_FOREVER);
 		mode = global_state.current_waveform;
 		phase_inc = global_state.phase_inc;
+		mix_active = global_state.mix_mode;
 		if (global_state.mode_changed) {
-			LOG_INF("Audio Mode -> %s", get_waveform_name(mode));
+			LOG_INF("Audio Mode -> %s %s", get_waveform_name(mode), 
+				mix_active ? "(Phase-Locked Mix)" : "");
 			global_state.mode_changed = false;
 		}
 		k_mutex_unlock(&global_state.lock);
 
-		/* 1. Generate Raw Waveform Batch */
-		generate_waveform_batch(mode, mono_buffer, SAMPLES_PER_BLOCK, &phase, phase_inc);
+		/* 1. Generate Osc 1 (Main Frequency) */
+		/* We use a local copy to generate Osc 1, then the SAME original master_phase for Osc 2 */
+		local_phase = master_phase;
+		generate_waveform_batch(mode, mono_buffer, SAMPLES_PER_BLOCK, &local_phase, phase_inc);
 
-		/* 2. Apply digital attenuation (scale Q15 by ~0.15) */
+		if (mix_active) {
+			/* 2. Generate Osc 2 (One octave up: 2x frequency, 2x phase) */
+			/* Using the SAME starting master_phase ensures perfect alignment */
+			uint32_t harmonic_phase = master_phase * 2;
+			uint32_t harmonic_inc = phase_inc * 2;
+			uint32_t dummy_phase = harmonic_phase;
+			
+			generate_waveform_batch(mode, mono_buffer2, SAMPLES_PER_BLOCK, &dummy_phase, harmonic_inc);
+
+			/* 3. Mix: Result = (Osc1 * 0.5) + (Osc2 * 0.5) */
+			arm_scale_q15(mono_buffer, 0x4000, 0, mono_buffer, SAMPLES_PER_BLOCK);
+			arm_scale_q15(mono_buffer2, 0x4000, 0, mono_buffer2, SAMPLES_PER_BLOCK);
+			arm_add_q15(mono_buffer, mono_buffer2, mono_buffer, SAMPLES_PER_BLOCK);
+		}
+
+		/* Update master phase for the next block */
+		master_phase = local_phase;
+
+		/* 4. Apply global attenuation (scale Q15 by ~0.15) */
 		arm_scale_q15(mono_buffer, ATTENUATION_FACTOR, 0, mono_buffer, SAMPLES_PER_BLOCK);
 
 		/* 3. Get memory block from slab */
@@ -137,12 +165,22 @@ K_THREAD_DEFINE(audio_tid, AUDIO_STACK_SIZE, audio_thread_fn, NULL, NULL, NULL,
 
 /* --- User Interface / Control --- */
 
-void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+void wave_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	ARG_UNUSED(dev); ARG_UNUSED(cb); ARG_UNUSED(pins);
-	
+
 	k_mutex_lock(&global_state.lock, K_NO_WAIT);
 	global_state.current_waveform = (global_state.current_waveform + 1) % WAVE_COUNT;
+	global_state.mode_changed = true;
+	k_mutex_unlock(&global_state.lock);
+}
+
+void mix_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
+{
+	ARG_UNUSED(dev); ARG_UNUSED(cb); ARG_UNUSED(pins);
+
+	k_mutex_lock(&global_state.lock, K_NO_WAIT);
+	global_state.mix_mode = !global_state.mix_mode;
 	global_state.mode_changed = true;
 	k_mutex_unlock(&global_state.lock);
 }
@@ -150,9 +188,14 @@ void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t
 int main(void)
 {
 	struct i2s_config config;
-	const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(SW0_NODE, gpios);
-	struct gpio_callback button_cb_data;
+	const struct gpio_dt_spec btn_wave = GPIO_DT_SPEC_GET(SW_WAVE_NODE, gpios);
+	struct gpio_callback wave_cb_data;
 	int ret;
+
+	/* Mix button is optional (e.g. MCXE31B only has one button) */
+	bool has_mix_btn = DT_NODE_EXISTS(SW_MIX_NODE);
+	struct gpio_dt_spec btn_mix;
+	struct gpio_callback mix_cb_data;
 
 	LOG_INF("Starting Multi-Threaded I2S Audio Engine");
 	k_mutex_init(&global_state.lock);
@@ -163,7 +206,8 @@ int main(void)
 		return -ENODEV;
 	}
 
-	/* Configure Hardware */
+	/* Configure Hardware ... */
+
 	config.word_size = SAMPLE_BIT_WIDTH;
 	config.channels = CHANNELS;
 	config.format = I2S_FMT_DATA_FORMAT_I2S;
@@ -187,10 +231,18 @@ int main(void)
 	}
 
 	/* Initialize UI */
-	gpio_pin_configure_dt(&button, GPIO_INPUT);
-	gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
-	gpio_init_callback(&button_cb_data, button_pressed, BIT(button.pin));
-	gpio_add_callback(button.port, &button_cb_data);
+	gpio_pin_configure_dt(&btn_wave, GPIO_INPUT);
+	gpio_pin_interrupt_configure_dt(&btn_wave, GPIO_INT_EDGE_TO_ACTIVE);
+	gpio_init_callback(&wave_cb_data, wave_button_pressed, BIT(btn_wave.pin));
+	gpio_add_callback(btn_wave.port, &wave_cb_data);
+
+	if (has_mix_btn) {
+		btn_mix = (struct gpio_dt_spec)GPIO_DT_SPEC_GET(SW_MIX_NODE, gpios);
+		gpio_pin_configure_dt(&btn_mix, GPIO_INPUT);
+		gpio_pin_interrupt_configure_dt(&btn_mix, GPIO_INT_EDGE_TO_ACTIVE);
+		gpio_init_callback(&mix_cb_data, mix_button_pressed, BIT(btn_mix.pin));
+		gpio_add_callback(btn_mix.port, &mix_cb_data);
+	}
 
 	/* Start Clocks (via RX) */
 	ret = i2s_trigger(i2s_dev, I2S_DIR_RX, I2S_TRIGGER_START);
@@ -201,21 +253,9 @@ int main(void)
 	/* Launch Audio Engine */
 	k_thread_start(audio_tid);
 
-	LOG_INF("Control Plane Ready. Use button to cycle waveforms. Frequency will toggle every 1s.");
+	LOG_INF("Control Plane Ready. Press SW3 to toggle Dual-Oscillator Mix (440Hz + 880Hz).");
 
-	bool toggle = false;
 	while (1) {
-		/* Toggle frequency every second for testing */
-		k_mutex_lock(&global_state.lock, K_FOREVER);
-		if (toggle) {
-			global_state.frequency = 880;
-		} else {
-			global_state.frequency = 440;
-		}
-		update_phase_inc(&global_state);
-		k_mutex_unlock(&global_state.lock);
-
-		toggle = !toggle;
 		k_sleep(K_SECONDS(1));
 	}
 
