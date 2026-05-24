@@ -1,52 +1,86 @@
-PCM5102A Multi-Waveform Generator (FRDM-MCXN947 - SAI1)
-#########################################################
+NXP MCX Modular DSP Synthesiser
+###############################
 
-Overview
+A high-performance, phase-coherent multi-threaded I2S synthesiser for NXP MCX E and N series microcontrollers. This project implements a Direct Digital Synthesis (DDS) engine with a modular DSP pipeline architecture.
+
+Features
 ********
 
-This project implements a real-time waveform generator using the **PCM5102A 32-bit I2S DAC** (WCMCU-5102 breakout) and the **CMSIS-DSP** library. It features a cycling waveform engine that can generate **Sine**, **Square**, **Sawtooth**, and **Triangle** waves at 48 kHz stereo.
+*   **Modular DSP Pipeline**: Decoupled "Assembly Line" architecture separating Sources, Mixers, and Effects.
+*   **Phase-Locked Oscillators**: Dual-oscillator engine with 32-bit phase accumulation and perfect harmonic alignment.
+*   **Advanced Synthesis**: Supports Sine, Square, Sawtooth, Triangle, and 2-operator Phase Modulation (FM).
+*   **Global Effects**: Real-time bitcrushing (NES-style) and digital attenuation.
+*   **Hardware Accelerated**: Utilizes CMSIS-DSP (SIMD) for all mixing and scaling operations.
+*   **Multi-Platform**: Native support for FRDM-MCXE247, FRDM-MCXE31B, and FRDM-MCXN947.
 
-Hardware Setup
-**************
+Architecture
+************
 
-- **Board:** FRDM-MCXN947 (Dual-core Cortex-M33)
-- **DAC:** PCM5102A (I2S) - WCMCU-5102 Breakout
-- **Connection:** Arduino Header J1 (Inner Row - Odd Pins)
-- **User Interface:** **SW2** (User Button) used to cycle through waveforms.
+The audio engine runs in a high-priority co-operative thread (Priority -2) and follows a linear DSP pipeline:
 
-Verified Wiring Diagram (Measurement-Confirmed)
-==============================================
+1.  **Source**: Generate primary waveform (DDS).
+2.  **Mixer**: Generate and safely combine a phase-locked harmonic (1 octave up).
+3.  **Processors**: Apply global effects (e.g., Bitcrush).
+4.  **Output**: Master attenuation and I2S DMA transmission.
 
-Connect the WCMCU-5102 breakout to the FRDM-MCXN947 headers as follows:
+Hardware Mapping
+****************
 
-*   **VCC** -> 5V (**J3 Pin 10**)
-*   **GND** -> GND (**J3 Pin 12**)
-*   **BCK** -> **J1 Pin 1** (Inner row) - 1.536 MHz Bit Clock
-*   **DIN** -> **J1 Pin 5** (Inner row) - Serial Data
-*   **LCK (LRCK)** -> **J1 Pin 11** (Inner row) - 48 kHz Word Clock
-*   **XMT** -> 3.3V (**J3 Pin 8**) [Unmute]
-*   **SCK** -> Disconnected (Internal PLL mode)
+FRDM-MCXE247 / FRDM-MCXE31B
+===========================
 
-**Note on J1 Pin 3:** This pin is "dead" by default as it requires moving jumper **SJ10**. Use **J1 Pin 11** for the Frame Sync signal instead.
+*   **SW2 (PTA9)**: Cycle Waveform Type (Sine, Square, FM, etc.)
+*   **SW3 (PTC10)**: Cycle Mix/Effect State:
+    *   State 0: Clean Solo
+    *   State 1: Clean Mix
+    *   State 2: Crushed Solo (4-bit)
+    *   State 3: Crushed Mix (4-bit)
+*   **I2S Output (MikroBUS)**:
+    *   BCK: SCK
+    *   LRCK: CS
+    *   DOUT: MOSI
 
-Breakout Configuration (WCMCU-5102)
-===================================
+FRDM-MCXN947
+============
 
-The following pins on the PCM5102A breakout must be tied to **GND**:
-- **SCL**: Enables internal PLL (Master Clock generation from BCK).
-- **FMT**: Selects I2S format.
-- **FLT**: Selects normal filter.
-- **DMP**: Disables de-emphasis.
+*   **SW2 (User SW2)**: Cycle Waveform Type
+*   **SW3 (User SW3)**: Cycle Mix/Effect State
+*   **I2S Output (SAI1 - J1 Header)**:
+    *   BCK: J1-1 (PIO3_16)
+    *   DOUT: J1-5 (PIO3_20)
+    *   LRCK: J1-11 (PIO3_17)
 
 Building and Running
 ********************
 
-To build the project:
+To build for the FRDM-MCXE247:
 
 .. code-block:: bash
 
-    west build -b frdm_mcxn947/mcxn947/cpu0 i2s-dac -p always
+    west build -b frdm_mcxe247 pcm5102a -p always
 
-Interactive Control:
-Press **SW2** to cycle through: **SINE -> SQUARE -> SAWTOOTH -> TRIANGLE -> SINE**.
-The application logs heartbeats to the console to confirm DMA activity.
+To build for the FRDM-MCXN947:
+
+.. code-block:: bash
+
+    west build -b frdm_mcxn947/mcxn947/cpu0 pcm5102a -p always
+
+Flashing:
+
+.. code-block:: bash
+
+    west flash
+
+Author
+******
+
+Jan-Willem Smaal <usenet@gispen.org>
+
+References & Acknowledgments
+****************************
+
+This synthesiser implements **Direct Digital Synthesis (DDS)**, a technique pioneered in the early 1970s. Key references include:
+
+*   **Tierney, J., Rader, C.M., and Gold, B. (1971)**: *"A Digital Frequency Synthesizer"*. IEEE Transactions on Audio and Electroacoustics. This is the seminal paper that defined the phase-accumulator and lookup-table architecture used here.
+*   **Analog Devices (1999)**: *"A Technical Tutorial on Digital Signal Synthesis"*. A foundational industry resource for understanding frequency resolution, phase truncation, and DDS spurs.
+*   **Chowning, J. M. (1973)**: *"The Synthesis of Complex Audio Spectra by Means of Frequency Modulation"*. Journal of the Audio Engineering Society. Used as the basis for the Phase Modulation (FM) implementation in the `USR2` oscillator.

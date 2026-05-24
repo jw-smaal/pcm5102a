@@ -1,7 +1,14 @@
 /**
  * @file generators.c
- * @brief Waveform generator implementation
+ * @brief Waveform generation using Direct Digital Synthesis (DDS)
  * @author Jan-Willem Smaal <usenet@gispen.org>
+ * 
+ * This implementation is based on the seminal DDS architecture described in:
+ * "A Digital Frequency Synthesizer" by J. Tierney, C. M. Rader, and B. Gold (1971).
+ * 
+ * Phase Modulation (FM) implementation in calc_usr2 is based on:
+ * "The Synthesis of Complex Audio Spectra by Means of Frequency Modulation" 
+ * by John M. Chowning (1973).
  */
 
 #include "generators.h"
