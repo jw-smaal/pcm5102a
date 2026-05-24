@@ -17,9 +17,7 @@ enum waveform_type {
 	WAVE_SAWTOOTH,
 	WAVE_TRIANGLE,
 	WAVE_USR1,
-	WAVE_USR2,
-	WAVE_USR3,
-	WAVE_USR4,
+	WAVE_USR2, /* FM SINE */
 	WAVE_COUNT
 };
 

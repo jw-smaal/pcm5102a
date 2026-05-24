@@ -21,10 +21,6 @@ const char *get_waveform_name(enum waveform_type type)
 		return "USR1";
 	case WAVE_USR2:
 		return "FM SINE";
-	case WAVE_USR3:
-		return "NES TRI";
-	case WAVE_USR4:
-		return "USR4";
 	default:
 		return "UNKNOWN";
 	}
@@ -87,8 +83,8 @@ static inline q15_t calc_usr1(uint32_t phase)
  */
 static inline q15_t calc_usr2(uint32_t phase)
 {
-	/* 1. Calculate Modulator (8x frequency harmonic) */
-	q15_t mod = arm_sin_q15((q15_t)((phase * 8) >> 17));
+	/* 1. Calculate Modulator (2x frequency harmonic) */
+	q15_t mod = arm_sin_q15((q15_t)((phase * 2) >> 17));
 
 	/* 2. Scale Modulator to create a Phase Offset (Modulation Index) 
 	 * Shifting by 14 gives a rich but controlled metallic timbre.
@@ -97,16 +93,6 @@ static inline q15_t calc_usr2(uint32_t phase)
 
 	/* 3. Apply modulated phase to Carrier sine */
 	return arm_sin_q15((q15_t)((phase + phase_offset) >> 17));
-}
-
-/**
- * @brief NES-style 4-bit (16-step) Triangle wave
- */
-static inline q15_t calc_usr3(uint32_t phase)
-{
-	q15_t tri = calc_triangle(phase);
-	/* Mask off lower 12 bits to leave only 16 discrete steps (4-bit) */
-	return (q15_t)(tri & 0xF000);
 }
 
 void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t size, uint32_t *phase,
@@ -132,9 +118,6 @@ void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t si
 		case WAVE_USR2:
 			buffer[i] = calc_usr2(*phase);
 			break;
-		case WAVE_USR3:
-			buffer[i] = calc_usr3(*phase);
-			break;
 		default:
 			buffer[i] = 0;
 			break;
@@ -144,3 +127,4 @@ void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t si
 		*phase += phase_inc;
 	}
 }
+
