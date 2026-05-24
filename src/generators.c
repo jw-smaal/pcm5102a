@@ -85,20 +85,16 @@ static inline q15_t calc_usr1(uint32_t phase)
 }
 
 /**
- * @brief Simple Phase Modulation (FM) generator
- * Modulates carrier phase with a sine at 2x frequency
+ * @brief Simple Phase Modulation (FM)
  */
 static inline q15_t calc_usr2(uint32_t phase)
 {
-	/* 1. Calculate Modulator (2x frequency harmonic) */
+	/* 2x frequency modulator */
 	q15_t mod = arm_sin_q15((q15_t)((phase * 2) >> 17));
 
-	/* 2. Scale Modulator to create a Phase Offset (Modulation Index) 
-	 * Shifting by 14 gives a rich but controlled metallic timbre.
-	 */
+	/* Scale modulator for phase offset (modulation index) */
 	uint32_t phase_offset = (uint32_t)mod << 14;
 
-	/* 3. Apply modulated phase to Carrier sine */
 	return arm_sin_q15((q15_t)((phase + phase_offset) >> 17));
 }
 
@@ -130,7 +126,6 @@ void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t si
 			break;
 		}
 
-		/* Global 32-bit phase increment with natural wrapping */
 		*phase += phase_inc;
 	}
 }

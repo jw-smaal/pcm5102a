@@ -106,7 +106,7 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 		enum effect_mode effect;
 		uint32_t local_phase;
 
-		/* Safely copy control parameters */
+		/* Synchronize control parameters */
 		k_mutex_lock(&global_state.lock, K_FOREVER);
 		mode = global_state.current_waveform;
 		phase_inc = global_state.phase_inc;
@@ -115,8 +115,12 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 
 		if (global_state.mode_changed) {
 			const char *fx_name = "BYPASS";
-			if (effect == EFFECT_BITCRUSH) fx_name = "BITCRUSH (4-bit)";
-			if (effect == EFFECT_BITBEEF) fx_name = "BITBEEF (0xBEEF)";
+
+			if (effect == EFFECT_BITCRUSH) {
+				fx_name = "BITCRUSH (4-bit)";
+			} else if (effect == EFFECT_BITBEEF) {
+				fx_name = "BITBEEF (0xBEEF)";
+			}
 
 			LOG_INF("Audio Mode -> %s %s [Effect: %s]", 
 				get_waveform_name(mode), 
@@ -126,25 +130,19 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 		}
 		k_mutex_unlock(&global_state.lock);
 
-		/* DSP PIPELINE ASSEMBLY LINE */
-
-		/* 1. Generate Osc 1 (Main Frequency) */
+		/* DSP Pipeline */
 		local_phase = master_phase;
 		generate_waveform_batch(mode, mono_buffer, SAMPLES_PER_BLOCK, &local_phase, phase_inc);
 
-		/* 2. Generate and Mix Osc 2 (Harmonic) */
 		if (mix_active) {
 			uint32_t harmonic_phase = master_phase * 2;
 			uint32_t harmonic_inc = phase_inc * 2;
 			uint32_t dummy_phase = harmonic_phase;
 			
 			generate_waveform_batch(mode, mono_buffer2, SAMPLES_PER_BLOCK, &dummy_phase, harmonic_inc);
-
-			/* Modular Mixer: Dest = (Dest*0.5) + (Src*0.5) */
 			mixer_combine(mono_buffer, mono_buffer2, SAMPLES_PER_BLOCK);
 		}
 
-		/* 3. Apply Global Effects */
 		switch (effect) {
 		case EFFECT_BITCRUSH:
 			effect_bitcrush(mono_buffer, SAMPLES_PER_BLOCK, 4);
@@ -153,28 +151,20 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 			effect_bitbeef(mono_buffer, SAMPLES_PER_BLOCK);
 			break;
 		default:
-			/* BYPASS: Do nothing, zero overhead */
 			break;
 		}
 
-		/* 4. Apply Master Output Attenuation */
 		effect_attenuate(mono_buffer, SAMPLES_PER_BLOCK, ATTENUATION_FACTOR);
-
-		/* Update master phase for the next block */
 		master_phase = local_phase;
 
-		/* --- End of Pipeline --- */
-
-		/* 3. Get memory block from slab */
+		/* Output Processing */
 		ret = k_mem_slab_alloc(&audio_slab, &mem_block, K_FOREVER);
 		if (ret < 0) {
 			continue;
 		}
 
-		/* 4. Interleave into memory block */
 		interleave_stereo(mono_buffer, (int16_t *)mem_block, SAMPLES_PER_BLOCK);
 
-		/* 5. Send to I2S */
 		ret = i2s_write(i2s_dev, mem_block, BLOCK_SIZE);
 		if (ret < 0) {
 			k_mem_slab_free(&audio_slab, mem_block);
@@ -182,7 +172,6 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 			continue;
 		}
 
-		/* 6. Start I2S Trigger on first block */
 		if (!started) {
 			ret = i2s_trigger(i2s_dev, I2S_DIR_TX, I2S_TRIGGER_START);
 			if (ret < 0) {
