@@ -1,0 +1,33 @@
+/*
+ * FRDM-MCXE247 SAI/I2S Configuration
+ * Physical Mapping (Header J1 Inner Row):
+ * - Pin 1:  Bit Clock (BCK)   -> PTB8
+ * - Pin 5:  Data Out (DIN)    -> PTB9
+ * - Pin 11: Frame Sync (LRCK) -> PTE2
+ */
+
+&sai1 {
+	status = "okay";
+	pinctrl-0 = <&pinmux_sai1>;
+	pinctrl-names = "default";
+	nxp,tx-channel = <1>; /* Bitmask: 1 = Channel 0 (TXD0) */
+};
+
+/ {
+	aliases {
+		i2s-tx = &sai1;
+	};
+};
+
+&pinctrl {
+	pinmux_sai1: pinmux_sai1 {
+		group0 {
+			pinmux = <SAI1_BCLK_PTB8>,
+				 <SAI1_SYNC_PTE2>,
+				 <SAI1_D0_PTB9>;
+			drive-strength = "high";
+			slew-rate = "fast";
+			input-enable;
+		};
+	};
+};
