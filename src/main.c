@@ -14,7 +14,7 @@
 
 LOG_MODULE_REGISTER(waveform_gen, CONFIG_LOG_DEFAULT_LEVEL);
 
-#define I2S_NODE DT_NODELABEL(sai1)
+#define I2S_NODE DT_ALIAS(i2s_tx)
 #define SW0_NODE DT_ALIAS(sw0)
 
 #define SAMPLE_RATE CONFIG_AUDIO_SAMPLE_RATE
@@ -45,13 +45,12 @@ void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t
 }
 
 /**
- * @brief Interleave mono samples into stereo 16-bit words with attenuation
+ * @brief Interleave mono samples into stereo 16-bit words
  */
-static void interleave_stereo_attenuated(q15_t *mono, int16_t *stereo, uint32_t samples)
+static void interleave_stereo(q15_t *mono, int16_t *stereo, uint32_t samples)
 {
 	for (uint32_t i = 0; i < samples; i++) {
-		/* Apply digital attenuation (scale Q15 by 0.15) */
-		int16_t val = (int16_t)(((int32_t)mono[i] * ATTENUATION_FACTOR) >> 15);
+		int16_t val = mono[i];
 		stereo[i * 2] = val;     /* Left */
 		stereo[i * 2 + 1] = val; /* Right */
 	}
@@ -63,7 +62,7 @@ int main(void)
 		.current_waveform = WAVE_SINE,
 		.mode_changed = true,
 	};
-	uint16_t phase = 0;
+	uint32_t phase = 0;
 	struct i2s_config config;
 	int ret;
 
@@ -109,9 +108,10 @@ int main(void)
 		return ret;
 	}
 
-	uint16_t phase_inc =
-		(uint16_t)(((uint64_t)CONFIG_WAVEFORM_FREQUENCY * PHASE_FULL_CYCLE) /
-			   SAMPLE_RATE);
+	/* Pre-calculate the frequency-to-phase-increment factor */
+	/* Constant for 32-bit phase accumulator: (2^32 / SAMPLE_RATE) */
+	const float phase_inc_factor = 4294967296.0f / SAMPLE_RATE;
+	uint32_t phase_inc = (uint32_t)(CONFIG_WAVEFORM_FREQUENCY * phase_inc_factor);
 
 	gpio_pin_configure_dt(&button, GPIO_INPUT);
 	gpio_pin_interrupt_configure_dt(&button, GPIO_INT_EDGE_TO_ACTIVE);
@@ -139,14 +139,17 @@ int main(void)
 		/* Generate Raw Waveform Batch */
 		generate_waveform_batch(mode, mono_buffer, SAMPLES_PER_BLOCK, &phase, phase_inc);
 
+		/* Apply digital attenuation using CMSIS-DSP (scale Q15 by ~0.15) */
+		arm_scale_q15(mono_buffer, ATTENUATION_FACTOR, 0, mono_buffer, SAMPLES_PER_BLOCK);
+
 		/* Get memory block from slab */
 		ret = k_mem_slab_alloc(&audio_slab, &mem_block, K_FOREVER);
 		if (ret < 0) {
 			continue;
 		}
 
-		/* Interleave and write to memory block with attenuation */
-		interleave_stereo_attenuated(mono_buffer, (int16_t *)mem_block, SAMPLES_PER_BLOCK);
+		/* Interleave into memory block */
+		interleave_stereo(mono_buffer, (int16_t *)mem_block, SAMPLES_PER_BLOCK);
 
 		/* Send to I2S */
 		ret = i2s_write(i2s_dev, mem_block, BLOCK_SIZE);

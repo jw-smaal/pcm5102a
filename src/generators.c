@@ -33,17 +33,19 @@ const char *get_waveform_name(enum waveform_type type)
 /**
  * @brief Single Sine point generator
  */
-static inline q15_t calc_sine(uint16_t phase)
+static inline q15_t calc_sine(uint32_t phase)
 {
-	return arm_sin_q15((q15_t)phase);
+	/* Use top 15 bits for arm_sin_q15 (expects 0..32767) */
+	return arm_sin_q15((q15_t)(phase >> 17));
 }
 
 /**
  * @brief Single Square point generator
  */
-static inline q15_t calc_square(uint16_t phase)
+static inline q15_t calc_square(uint32_t phase)
 {
-	if (phase < (PHASE_FULL_CYCLE / 2)) {
+	/* MSB determines the half-cycle */
+	if (phase < 0x80000000) {
 		return 32767;
 	} else {
 		return -32768;
@@ -53,33 +55,34 @@ static inline q15_t calc_square(uint16_t phase)
 /**
  * @brief Single Sawtooth point generator
  */
-static inline q15_t calc_sawtooth(uint16_t phase)
+static inline q15_t calc_sawtooth(uint32_t phase)
 {
-	/* Linear ramp: 0..32767 maps to -32768..32767 */
-	return (q15_t)(((int32_t)phase * 2) - 32768);
+	/* Map 32-bit phase to q15_t range [-32768, 32767] */
+	return (q15_t)((phase >> 16) - 32768);
 }
 
 /**
  * @brief Single Triangle point generator
  */
-static inline q15_t calc_triangle(uint16_t phase)
+static inline q15_t calc_triangle(uint32_t phase)
 {
-	if (phase < (PHASE_FULL_CYCLE / 2)) {
-		/* Rising edge: 0..16383 maps to -32768..32767 */
-		return (q15_t)(((int32_t)phase * 4) - 32768);
+	if (phase < 0x80000000) {
+		/* Rising edge: 0..0x7FFFFFFF -> -32768..32767 */
+		return (q15_t)((phase >> 15) - 32768);
 	} else {
-		/* Falling edge: 16384..32767 maps to 32767..-32768 */
-		return (q15_t)(32767 - (((int32_t)phase - 16384) * 4));
+		/* Falling edge: 0x80000000..0xFFFFFFFF -> 32767..-32768 */
+		return (q15_t)(32767 - ((phase - 0x80000000) >> 15));
 	}
 }
 
-static inline q15_t calc_usr1(uint16_t phase)
+static inline q15_t calc_usr1(uint32_t phase)
 {
-	return (q15_t)(32768 - (((int32_t)phase - 32768) * 2));
+	/* Simple example pulse wave / specialized ramp */
+	return (q15_t)(32768 - (phase >> 16));
 }
 
-void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t size, uint16_t *phase,
-			     uint16_t phase_inc)
+void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t size, uint32_t *phase,
+			     uint32_t phase_inc)
 {
 	for (uint32_t i = 0; i < size; i++) {
 		switch (mode) {
@@ -103,7 +106,7 @@ void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t si
 			break;
 		}
 
-		/* Global phase increment and wrapping */
-		*phase = (*phase + phase_inc) % PHASE_FULL_CYCLE;
+		/* Global 32-bit phase increment with natural wrapping */
+		*phase += phase_inc;
 	}
 }
