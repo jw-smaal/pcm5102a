@@ -14,7 +14,8 @@ void effect_bitbeef(q15_t *buffer, uint32_t size)
 	}
 }
 
-void effect_bitcrush(q15_t *buffer, uint32_t size, uint8_t bits)
+/* This function can be optimized with CMCIS this is the old version */
+void effect_bitcrush_old(q15_t *buffer, uint32_t size, uint8_t bits)
 {
 	if (bits >= 16) {
 		return;
@@ -26,6 +27,25 @@ void effect_bitcrush(q15_t *buffer, uint32_t size, uint8_t bits)
 		buffer[i] = (q15_t)(buffer[i] & mask);
 	}
 }
+
+void effect_bitcrush(q15_t *buffer, uint32_t size, uint8_t bits)
+{
+    if (bits >= 16 || bits == 0) {
+        return;
+    }
+
+	/* For shift right we need a negative number */ 
+    int8_t shift_right = (int8_t)(bits - 16); 
+	/* For shift left we need positive number */ 
+    int8_t shift_left  = (int8_t)(16 - bits); 
+
+    /* Shift to the right we discard precision but we keep the sign bit. */
+	arm_shift_q15(buffer, shift_right, buffer, size);
+
+    /* Shift back to the left to restore the amplitude */ 
+    arm_shift_q15(buffer, shift_left, buffer, size);
+}
+
 
 void effect_attenuate(q15_t *buffer, uint32_t size, q15_t factor)
 {

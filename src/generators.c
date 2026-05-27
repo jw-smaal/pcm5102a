@@ -56,6 +56,22 @@ static inline q15_t calc_square(uint32_t phase)
 }
 
 /**
+ * @brief Single Square point generator with duty cycle.  
+ * half cycle = 0x80000000 
+ */
+
+static inline q15_t calc_pwm(uint32_t phase, uint32_t amount)
+{
+	if ( phase <= amount ) {
+		return 32767;
+	} else {
+		return -32768;
+	}
+}
+
+
+
+/**
  * @brief Single Sawtooth point generator
  */
 static inline q15_t calc_sawtooth(uint32_t phase)
@@ -120,6 +136,9 @@ void generate_waveform_batch(enum waveform_type mode, q15_t *buffer, uint32_t si
 			break;
 		case WAVE_USR2:
 			buffer[i] = calc_usr2(*phase);
+			break;
+		case WAVE_PWM:
+			buffer[i] = calc_pwm(*phase, 0xB0000000); 
 			break;
 		default:
 			buffer[i] = 0;

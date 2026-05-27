@@ -10,6 +10,10 @@
 #include <zephyr/kernel.h>
 #include <arm_math.h>
 
+#define HALF_CYCLE 0x80000000 
+#define Q15T_MAX 32767
+#define Q15T_MIN -32768
+
 /* Waveform selection enum */
 enum waveform_type {
 	WAVE_SINE = 0,
@@ -18,6 +22,7 @@ enum waveform_type {
 	WAVE_TRIANGLE,
 	WAVE_USR1,
 	WAVE_USR2, /* FM SINE */
+	WAVE_PWM,
 	WAVE_COUNT
 };
 
