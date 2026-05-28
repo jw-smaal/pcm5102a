@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 Jan-Willem Smaal <usenet@gispen.org>
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 /**
  * @file mixer.c
  * @brief Audio mixing implementation

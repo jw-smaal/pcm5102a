@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 Jan-Willem Smaal <usenet@gispen.org>
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 /**
  * @file main.c
  * @brief Multi-Threaded Waveform Generator for PCM5102A (I2S)
@@ -28,6 +33,9 @@ LOG_MODULE_REGISTER(waveform_gen, CONFIG_LOG_DEFAULT_LEVEL);
 #define BLOCK_SIZE (SAMPLES_PER_BLOCK * CHANNELS * sizeof(int16_t))
 #define BLOCK_COUNT 16
 
+/* Constants for Phase Math */
+#define NCO_RANGE_F 4294967296.0f
+
 /* Attenuation factor: ~0.15 (approx -16dB reduction to target -10dBV) */
 #define ATTENUATION_FACTOR 4915
 
@@ -57,7 +65,7 @@ struct synth_state {
 	enum effect_mode effect;
 };
 
-static struct synth_state global_state = {
+static struct synth_state g_state = {
 	.current_waveform = WAVE_SINE,
 	.frequency = 440,
 	.mode_changed = true,
@@ -72,7 +80,7 @@ static const struct device *const i2s_dev = DEVICE_DT_GET(I2S_NODE);
 static void update_phase_inc(struct synth_state *state)
 {
 	/* Constant for 32-bit phase accumulator: (2^32 / SAMPLE_RATE) */
-	const float phase_inc_factor = 4294967296.0f / SAMPLE_RATE;
+	const float phase_inc_factor = NCO_RANGE_F / SAMPLE_RATE;
 	state->phase_inc = (uint32_t)(state->frequency * phase_inc_factor);
 }
 
@@ -89,7 +97,8 @@ static void interleave_stereo(q15_t *mono, int16_t *stereo, uint32_t samples)
 
 void audio_thread_fn(void *p1, void *p2, void *p3)
 {
-	ARG_UNUSED(p1); ARG_UNUSED(p2); ARG_UNUSED(p3);
+	struct synth_state *state = (struct synth_state *)p1;
+	ARG_UNUSED(p2); ARG_UNUSED(p3);
 	uint32_t master_phase = 0;
 	q15_t mono_buffer[SAMPLES_PER_BLOCK];
 	q15_t mono_buffer2[SAMPLES_PER_BLOCK];
@@ -107,13 +116,13 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 		uint32_t local_phase;
 
 		/* Synchronize control parameters */
-		k_mutex_lock(&global_state.lock, K_FOREVER);
-		mode = global_state.current_waveform;
-		phase_inc = global_state.phase_inc;
-		mix_active = global_state.mix_mode;
-		effect = global_state.effect;
+		k_mutex_lock(&state->lock, K_FOREVER);
+		mode = state->current_waveform;
+		phase_inc = state->phase_inc;
+		mix_active = state->mix_mode;
+		effect = state->effect;
 
-		if (global_state.mode_changed) {
+		if (state->mode_changed) {
 			const char *fx_name = "BYPASS";
 
 			if (effect == EFFECT_BITCRUSH) {
@@ -122,13 +131,16 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 				fx_name = "BITBEEF (0xBEEF)";
 			}
 
-			LOG_INF("Audio Mode -> %s %s [Effect: %s]", 
-				get_waveform_name(mode), 
-				mix_active ? "(Mixed)" : "",
-				fx_name);
-			global_state.mode_changed = false;
+			if (mix_active) {
+				LOG_INF("Audio Mode -> %s (Mixed) [Effect: %s]", 
+					get_waveform_name(mode), fx_name);
+			} else {
+				LOG_INF("Audio Mode -> %s [Effect: %s]", 
+					get_waveform_name(mode), fx_name);
+			}
+			state->mode_changed = false;
 		}
-		k_mutex_unlock(&global_state.lock);
+		k_mutex_unlock(&state->lock);
 
 		/* DSP Pipeline */
 		local_phase = master_phase;
@@ -165,10 +177,18 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 
 		interleave_stereo(mono_buffer, (int16_t *)mem_block, SAMPLES_PER_BLOCK);
 
+		/* 
+		 * Real-time audio: If the queue is full (-EAGAIN), do not block or retry.
+		 * The time window has passed, so we simply drop this block and move on.
+		 */
 		ret = i2s_write(i2s_dev, mem_block, BLOCK_SIZE);
 		if (ret < 0) {
 			k_mem_slab_free(&audio_slab, mem_block);
-			k_sleep(K_MSEC(100));
+			if (ret != -EAGAIN) {
+				LOG_ERR("I2S write failed: %d", ret);
+				return;
+			}
+			/* If EAGAIN, we dropped the block. Proceed to next loop immediately. */
 			continue;
 		}
 
@@ -183,31 +203,31 @@ void audio_thread_fn(void *p1, void *p2, void *p3)
 	}
 }
 
-K_THREAD_DEFINE(audio_tid, AUDIO_STACK_SIZE, audio_thread_fn, NULL, NULL, NULL,
-		AUDIO_PRIORITY, 0, K_TICKS_FOREVER);
-
 /* --- User Interface / Control --- */
 
 void wave_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	ARG_UNUSED(dev); ARG_UNUSED(cb); ARG_UNUSED(pins);
 
-	k_mutex_lock(&global_state.lock, K_NO_WAIT);
-	global_state.current_waveform = (global_state.current_waveform + 1) % WAVE_COUNT;
-	global_state.mode_changed = true;
-	k_mutex_unlock(&global_state.lock);
+	k_mutex_lock(&g_state.lock, K_NO_WAIT);
+	g_state.current_waveform = (g_state.current_waveform + 1) % WAVE_COUNT;
+	g_state.mode_changed = true;
+	k_mutex_unlock(&g_state.lock);
 }
 
 void mix_button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	ARG_UNUSED(dev); ARG_UNUSED(cb); ARG_UNUSED(pins);
 
-	k_mutex_lock(&global_state.lock, K_NO_WAIT);
+	k_mutex_lock(&g_state.lock, K_NO_WAIT);
 	/* Cycle through effects: BYPASS -> BITCRUSH -> BITBEEF */
-	global_state.effect = (global_state.effect + 1) % EFFECT_COUNT;
-	global_state.mode_changed = true;
-	k_mutex_unlock(&global_state.lock);
+	g_state.effect = (g_state.effect + 1) % EFFECT_COUNT;
+	g_state.mode_changed = true;
+	k_mutex_unlock(&g_state.lock);
 }
+
+K_THREAD_DEFINE(audio_tid, AUDIO_STACK_SIZE, audio_thread_fn, &g_state, NULL, NULL,
+		AUDIO_PRIORITY, 0, K_TICKS_FOREVER);
 
 int main(void)
 {
@@ -222,8 +242,8 @@ int main(void)
 	struct gpio_callback mix_cb_data;
 
 	LOG_INF("Starting Multi-Threaded I2S Audio Engine");
-	k_mutex_init(&global_state.lock);
-	update_phase_inc(&global_state);
+	k_mutex_init(&g_state.lock);
+	update_phase_inc(&g_state);
 
 	if (!device_is_ready(i2s_dev)) {
 		LOG_ERR("I2S device not ready");
@@ -258,6 +278,10 @@ int main(void)
 	gpio_pin_configure_dt(&btn_wave, GPIO_INPUT);
 	gpio_pin_interrupt_configure_dt(&btn_wave, GPIO_INT_EDGE_TO_ACTIVE);
 	gpio_init_callback(&wave_cb_data, wave_button_pressed, BIT(btn_wave.pin));
+	
+	/* Setup CONTAINER_OF pointer logic for callbacks */
+	wave_cb_data.handler = (gpio_callback_handler_t)wave_button_pressed;
+	
 	gpio_add_callback(btn_wave.port, &wave_cb_data);
 
 	if (has_mix_btn) {
@@ -265,6 +289,10 @@ int main(void)
 		gpio_pin_configure_dt(&btn_mix, GPIO_INPUT);
 		gpio_pin_interrupt_configure_dt(&btn_mix, GPIO_INT_EDGE_TO_ACTIVE);
 		gpio_init_callback(&mix_cb_data, mix_button_pressed, BIT(btn_mix.pin));
+		
+		/* Setup CONTAINER_OF pointer logic for callbacks */
+		mix_cb_data.handler = (gpio_callback_handler_t)mix_button_pressed;
+		
 		gpio_add_callback(btn_mix.port, &mix_cb_data);
 	}
 

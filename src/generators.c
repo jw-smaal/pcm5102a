@@ -48,28 +48,24 @@ static inline q15_t calc_sine(uint32_t phase)
 static inline q15_t calc_square(uint32_t phase)
 {
 	/* MSB determines the half-cycle */
-	if (phase < 0x80000000) {
-		return 32767;
+	if (phase < HALF_CYCLE) {
+		return Q15_MAX;
 	} else {
-		return -32768;
+		return Q15_MIN;
 	}
 }
 
 /**
  * @brief Single Square point generator with duty cycle.  
- * half cycle = 0x80000000 
  */
-
 static inline q15_t calc_pwm(uint32_t phase, uint32_t amount)
 {
-	if ( phase <= amount ) {
-		return 32767;
+	if (phase <= amount) {
+		return Q15_MAX;
 	} else {
-		return -32768;
+		return Q15_MIN;
 	}
 }
-
-
 
 /**
  * @brief Single Sawtooth point generator
@@ -77,7 +73,7 @@ static inline q15_t calc_pwm(uint32_t phase, uint32_t amount)
 static inline q15_t calc_sawtooth(uint32_t phase)
 {
 	/* Map 32-bit phase to q15_t range [-32768, 32767] */
-	return (q15_t)((phase >> 16) - 32768);
+	return (q15_t)((phase >> 16) - Q15_MID_OFFSET);
 }
 
 /**
@@ -85,19 +81,19 @@ static inline q15_t calc_sawtooth(uint32_t phase)
  */
 static inline q15_t calc_triangle(uint32_t phase)
 {
-	if (phase < 0x80000000) {
+	if (phase < HALF_CYCLE) {
 		/* Rising edge: 0..0x7FFFFFFF -> -32768..32767 */
-		return (q15_t)((phase >> 15) - 32768);
+		return (q15_t)((phase >> 15) - Q15_MID_OFFSET);
 	} else {
 		/* Falling edge: 0x80000000..0xFFFFFFFF -> 32767..-32768 */
-		return (q15_t)(32767 - ((phase - 0x80000000) >> 15));
+		return (q15_t)(Q15_MAX - ((phase - HALF_CYCLE) >> 15));
 	}
 }
 
 static inline q15_t calc_usr1(uint32_t phase)
 {
 	/* Simple example pulse wave / specialized ramp */
-	return (q15_t)(32768 - (phase >> 16));
+	return (q15_t)(Q15_MID_OFFSET - (phase >> 16));
 }
 
 /**

@@ -11,8 +11,7 @@
 #include <arm_math.h>
 
 #define HALF_CYCLE 0x80000000 
-#define Q15T_MAX 32767
-#define Q15T_MIN -32768
+#define Q15_MID_OFFSET 32768
 
 /* Waveform selection enum */
 enum waveform_type {
